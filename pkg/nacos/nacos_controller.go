@@ -425,6 +425,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 	namespace := dc.Spec.NacosServer.Namespace
 	var errDataIdList []string
 	l.Info("[Dual] sync dual", "dc name", dc.Name)
+	fmt.Println("sync dual test")
 	l = l.WithValues("group", group, "namespace", namespace)
 	anyContentChanged := false
 	syncIfAbsent := dc.Spec.Strategy.SyncPolicy == nacosiov1.IfAbsent
@@ -491,6 +492,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 				UpdateSyncStatus(dc, dataId, CalcMd5(localContent), "cluster", metav1.Now(), true, "")
 			}
 		} else if !syncIfAbsent {
+			logWithId.Info("[Dual} no new Dual")
 			if (!localExist || len(localContent) == 0) && serverExist {
 				if dc.Spec.Strategy.SyncDeletion {
 					_, err := scc.configClient.DeleteConfig(nacosclient.NacosConfigParam{

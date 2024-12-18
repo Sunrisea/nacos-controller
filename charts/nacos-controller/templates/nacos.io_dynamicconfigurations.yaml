@@ -281,6 +281,8 @@ spec:
                   of cluster Important: Run "make" to regenerate code after modifying
                   this file'
                 type: string
+              syncDirection:
+                type: string
               syncStatuses:
                 items:
                   properties:
