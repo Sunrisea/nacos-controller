@@ -197,6 +197,8 @@ spec:
                 x-kubernetes-map-type: atomic
               strategy:
                 properties:
+                  conflictPolicy:
+                    type: string
                   syncDeletion:
                     type: boolean
                   syncDirection:

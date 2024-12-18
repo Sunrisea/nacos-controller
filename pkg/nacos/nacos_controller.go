@@ -424,7 +424,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 	group := dc.Spec.NacosServer.Group
 	namespace := dc.Spec.NacosServer.Namespace
 	var errDataIdList []string
-
+	l.Info("[Dual] sync dual", "dc name", dc.Name)
 	l = l.WithValues("group", group, "namespace", namespace)
 	anyContentChanged := false
 	syncIfAbsent := dc.Spec.Strategy.SyncPolicy == nacosiov1.IfAbsent
@@ -462,6 +462,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 
 		lastSyncStatus := GetSyncStatusByDataId(dc.Status.SyncStatuses, dataId)
 		if ifNew || (lastSyncStatus == nil) {
+			logWithId.Info("[Dual] new Dual mode", "dataId", dataId)
 			//首次同步，需要解决冲突，建立监听
 			//如果configMap不存在，则从Nacos Server同步
 			if !localExist || (serverExist && !ifPreferCluster) {
@@ -514,6 +515,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 					logWithId.Info("skip syncing , due to same md5 of content", "md5", localContentMd5)
 					continue
 				} else {
+					logWithId.Info("[Dual] content changed, sync dataId from cluster to server", "dataId", dataId)
 					_, err = scc.configClient.PublishConfig(nacosclient.NacosConfigParam{
 						DynamicConfiguration: dc,
 						Group:                group,

@@ -174,7 +174,7 @@ func (r *DynamicConfiguration) validateSyncStrategy() *field.Error {
 		return field.NotSupported(
 			field.NewPath("spec").Child("strategy").Child("conflictPolicy"),
 			r.Spec.Strategy.ConflictPolicy,
-			syncPolicySupportList)
+			conflictPolicySupportList)
 	}
 	return nil
 }
