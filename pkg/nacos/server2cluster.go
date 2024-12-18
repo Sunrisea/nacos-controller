@@ -123,6 +123,10 @@ func (cb *DefaultServer2ClusterCallback) server2ClusterCallbackOneDC(ctx context
 		return err
 	}
 	l.Info("update content success", "newContent", content, "oldContent", oldContent)
+	if err := objWrapper.Flush(); err != nil {
+		l.Error(err, "flush object reference error")
+		return err
+	}
 	UpdateSyncStatus(&dc, dataId, newMd5, "server", metav1.Now(), true, "")
 	return cb.Status().Update(ctx, &dc)
 }

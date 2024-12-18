@@ -8,9 +8,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"strconv"
 	"strings"
 )
 
@@ -397,6 +399,7 @@ func (scc *SyncConfigurationController) syncServer2Cluster(ctx context.Context, 
 }
 
 func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosiov1.DynamicConfiguration) error {
+	mark := strconv.Itoa(rand.Intn(100))
 	l := log.FromContext(ctx)
 	ifNew := dc.Status.SyncDirection != nacosiov1.Dual
 	dc.Status.SyncDirection = nacosiov1.Dual
@@ -417,15 +420,14 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 
 	objWrapper, err := NewObjectReferenceWrapper(scc.cs, dc, &objectRef)
 	if err != nil {
-		l.Error(err, "[Dual] create object wrapper error")
+		l.Error(err, mark+"[Dual] create object wrapper error")
 		return err
 	}
 
 	group := dc.Spec.NacosServer.Group
 	namespace := dc.Spec.NacosServer.Namespace
 	var errDataIdList []string
-	l.Info("[Dual] sync dual", "dc name", dc.Name)
-	fmt.Println("sync dual test")
+	l.Info(mark+"[Dual] sync dual", "dc name", dc.Name)
 	l = l.WithValues("group", group, "namespace", namespace)
 	anyContentChanged := false
 	syncIfAbsent := dc.Spec.Strategy.SyncPolicy == nacosiov1.IfAbsent
@@ -434,10 +436,11 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 		logWithId := l.WithValues("dataId", dataId)
 		localContent, localExist, err := objWrapper.GetContent(dataId)
 		if err != nil {
-			logWithId.Error(err, "[Dual] read object reference content error", "objRef", objectRef.String())
+			logWithId.Error(err, mark+"[Dual] read object reference content error", "objRef", objectRef.String())
 			errDataIdList = append(errDataIdList, dataId)
 			continue
 		}
+		logWithId.Info(mark+"[Dual] try get config from server", "dataId", dataId)
 		serverContent, err := scc.configClient.GetConfig(nacosclient.NacosConfigParam{
 			DynamicConfiguration: dc,
 			Group:                group,
@@ -448,6 +451,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 			errDataIdList = append(errDataIdList, dataId)
 			UpdateSyncStatus(dc, dataId, "", "server", metav1.Now(), false, "read content from server error: "+err.Error())
 		}
+		logWithId.Info(mark+"[Dual] get config from server", "dataId", dataId, "content", serverContent)
 
 		nn := types.NamespacedName{
 			Namespace: dc.Namespace,
@@ -457,7 +461,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 		//如果syncIfAbsent 并且 configMap和 Nacos Server 的配置都存在，则忽略同步动作
 		if syncIfAbsent && serverExist && localExist {
 			scc.mappings.RemoveMapping(namespace, group, dataId, nn)
-			logWithId.Info("[Dual] skipped due to sync policy IfAbsent", "dataId", dataId)
+			logWithId.Info(mark+"[Dual] skipped due to sync policy IfAbsent", "dataId", dataId)
 			continue
 		}
 
@@ -492,7 +496,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 				UpdateSyncStatus(dc, dataId, CalcMd5(localContent), "cluster", metav1.Now(), true, "")
 			}
 		} else if !syncIfAbsent {
-			logWithId.Info("[Dual} no new Dual")
+			logWithId.Info(mark + "[Dual} no new Dual")
 			if (!localExist || len(localContent) == 0) && serverExist {
 				if dc.Spec.Strategy.SyncDeletion {
 					_, err := scc.configClient.DeleteConfig(nacosclient.NacosConfigParam{
@@ -500,7 +504,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 						Group:                group,
 						DataId:               dataId,
 					})
-					logWithId.Info("[Dual] delete dataId from server", "dataId", dataId)
+					logWithId.Info(mark+"[Dual] delete dataId from server", "dataId", dataId)
 					if err != nil {
 						logWithId.Error(err, "[Dual] delete dataId from server error")
 						errDataIdList = append(errDataIdList, dataId)
@@ -513,12 +517,12 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 			} else {
 				localContentMd5 := CalcMd5(localContent)
 				serverContentMd5 := CalcMd5(serverContent)
-				logWithId.Info("[Dual] localContent:"+localContent+" severContent:"+serverContent, "dataId", dataId, "localMd5", localContentMd5, "serverMd5", serverContentMd5)
+				logWithId.Info(mark+"[Dual] localContent:"+localContent+" severContent:"+serverContent, "dataId", dataId, "localMd5", localContentMd5, "serverMd5", serverContentMd5)
 				if localContentMd5 == serverContentMd5 {
 					logWithId.Info("skip syncing , due to same md5 of content", "md5", localContentMd5)
 					continue
 				} else {
-					logWithId.Info("[Dual] content changed, sync dataId from cluster to server", "dataId", dataId)
+					logWithId.Info(mark+"[Dual] content changed, sync dataId from cluster to server", "dataId", dataId, "content", localContent)
 					_, err = scc.configClient.PublishConfig(nacosclient.NacosConfigParam{
 						DynamicConfiguration: dc,
 						Group:                group,
