@@ -513,6 +513,7 @@ func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosi
 			} else {
 				localContentMd5 := CalcMd5(localContent)
 				serverContentMd5 := CalcMd5(serverContent)
+				logWithId.Info("[Dual] localContent:"+localContent+" severContent:"+serverContent, "dataId", dataId, "localMd5", localContentMd5, "serverMd5", serverContentMd5)
 				if localContentMd5 == serverContentMd5 {
 					logWithId.Info("skip syncing , due to same md5 of content", "md5", localContentMd5)
 					continue

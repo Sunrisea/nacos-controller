@@ -122,6 +122,7 @@ func (cb *DefaultServer2ClusterCallback) server2ClusterCallbackOneDC(ctx context
 		l.Error(err, "update content error", "obj", objRef)
 		return err
 	}
+	l.Info("update content success", "newContent", content, "oldContent", oldContent)
 	UpdateSyncStatus(&dc, dataId, newMd5, "server", metav1.Now(), true, "")
 	return cb.Status().Update(ctx, &dc)
 }
