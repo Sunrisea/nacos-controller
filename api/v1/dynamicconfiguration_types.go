@@ -40,11 +40,12 @@ type DynamicConfigurationSpec struct {
 type DynamicConfigurationStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	Phase              string              `json:"phase,omitempty"`
-	Message            string              `json:"message,omitempty"`
-	ObservedGeneration int64               `json:"observedGeneration,omitempty"`
-	SyncStatuses       []SyncStatus        `json:"syncStatuses,omitempty"`
-	ObjectRef          *v1.ObjectReference `json:"objectRef,omitempty"`
+	Phase              string                            `json:"phase,omitempty"`
+	Message            string                            `json:"message,omitempty"`
+	SyncDirection      DynamicConfigurationSyncDirection `json:"syncDirection,omitempty"`
+	ObservedGeneration int64                             `json:"observedGeneration,omitempty"`
+	SyncStatuses       []SyncStatus                      `json:"syncStatuses,omitempty"`
+	ObjectRef          *v1.ObjectReference               `json:"objectRef,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -69,9 +70,10 @@ type AdditionalConfiguration struct {
 }
 
 type SyncStrategy struct {
-	SyncPolicy    DynamicConfigurationSyncPolicy    `json:"syncPolicy,omitempty"`
-	SyncDeletion  bool                              `json:"syncDeletion,omitempty"`
-	SyncDirection DynamicConfigurationSyncDirection `json:"syncDirection,omitempty"`
+	SyncPolicy     DynamicConfigurationSyncPolicy         `json:"syncPolicy,omitempty"`
+	SyncDeletion   bool                                   `json:"syncDeletion,omitempty"`
+	SyncDirection  DynamicConfigurationSyncDirection      `json:"syncDirection,omitempty"`
+	ConflictPolicy DynamicConfigurationSyncConflictPolicy `json:"conflictPolicy,omitempty"`
 }
 
 type DynamicConfigurationSyncPolicy string
@@ -86,6 +88,14 @@ type DynamicConfigurationSyncDirection string
 const (
 	Cluster2Server DynamicConfigurationSyncDirection = "cluster2server"
 	Server2Cluster DynamicConfigurationSyncDirection = "server2cluster"
+	Dual           DynamicConfigurationSyncDirection = "dual"
+)
+
+type DynamicConfigurationSyncConflictPolicy string
+
+const (
+	PreferCluster DynamicConfigurationSyncConflictPolicy = "preferCluster"
+	PreferServer  DynamicConfigurationSyncConflictPolicy = "preferServer"
 )
 
 type NacosServerConfiguration struct {

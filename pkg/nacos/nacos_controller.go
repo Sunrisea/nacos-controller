@@ -61,6 +61,8 @@ func (scc *SyncConfigurationController) SyncDynamicConfiguration(ctx context.Con
 		return scc.syncServer2Cluster(ctx, dc)
 	case nacosiov1.Cluster2Server:
 		return scc.syncCluster2Server(ctx, dc)
+	case nacosiov1.Dual:
+		return scc.syncDual(ctx, dc)
 	default:
 		return fmt.Errorf("unsupport sync direction: %s", string(strategy.SyncDirection))
 	}
@@ -75,6 +77,8 @@ func (scc *SyncConfigurationController) Finalize(ctx context.Context, dc *nacosi
 		return scc.finalizeServer2Cluster(ctx, dc)
 	case nacosiov1.Cluster2Server:
 		return scc.finalizeCluster2Server(ctx, dc)
+	case nacosiov1.Dual:
+		return scc.finalizeDual(ctx, dc)
 	default:
 		return fmt.Errorf("not support sync direction: " + string(dc.Spec.Strategy.SyncDirection))
 	}
@@ -116,9 +120,41 @@ func (scc *SyncConfigurationController) finalizeCluster2Server(ctx context.Conte
 	return nil
 }
 
+func (scc *SyncConfigurationController) finalizeDual(ctx context.Context, dc *nacosiov1.DynamicConfiguration) error {
+	nn := types.NamespacedName{Name: dc.Name, Namespace: dc.Namespace}
+	scc.locks.DelLock(nn.String())
+	namespace := dc.Spec.NacosServer.Namespace
+	group := dc.Spec.NacosServer.Group
+	for _, dataId := range dc.Spec.DataIds {
+		scc.mappings.RemoveMapping(namespace, group, dataId, nn)
+	}
+	if !dc.Spec.Strategy.SyncDeletion {
+		return nil
+	}
+	l := log.FromContext(ctx)
+	var errDataIdList []string
+	for _, dataId := range dc.Spec.DataIds {
+		_, err := scc.configClient.DeleteConfig(nacosclient.NacosConfigParam{
+			DynamicConfiguration: dc,
+			Group:                group,
+			DataId:               dataId,
+		})
+		if err != nil {
+			l.Error(err, "delete dataId error", "dataId", dataId)
+			errDataIdList = append(errDataIdList, dataId)
+			UpdateSyncStatus(dc, dataId, "", "cluster-finalizer", metav1.Now(), false, err.Error())
+		}
+	}
+	if len(errDataIdList) > 0 {
+		return fmt.Errorf("err dataIds: %s", strings.Join(errDataIdList, ","))
+	}
+	return nil
+}
+
 // syncCluster2Server read DataIds from dc.spec.dataIds， and then read content from dc.spec.objectRef.
 // Compare content from objectRef with nacos server, and update nacos server side depend on dc.spec.strategy.syncPolicy
 func (scc *SyncConfigurationController) syncCluster2Server(ctx context.Context, dc *nacosiov1.DynamicConfiguration) error {
+	dc.Status.SyncDirection = nacosiov1.Cluster2Server
 	l := log.FromContext(ctx)
 	objRef := v1.ObjectReference{
 		Namespace:  dc.Namespace,
@@ -228,6 +264,7 @@ func (scc *SyncConfigurationController) syncCluster2Server(ctx context.Context, 
 
 func (scc *SyncConfigurationController) syncServer2Cluster(ctx context.Context, dc *nacosiov1.DynamicConfiguration) error {
 	l := log.FromContext(ctx)
+	dc.Status.SyncDirection = nacosiov1.Server2Cluster
 	var objectRef v1.ObjectReference
 	if dc.Spec.ObjectRef == nil {
 		// if user doesn't specify objectRef in spec, then generate a configmap with same name
@@ -332,6 +369,10 @@ func (scc *SyncConfigurationController) syncServer2Cluster(ctx context.Context, 
 		}
 	}
 	for _, dataId := range removedDataIds {
+		scc.mappings.RemoveMapping(namespace, group, dataId, types.NamespacedName{Namespace: dc.Namespace, Name: dc.Name})
+	}
+
+	for _, dataId := range removedDataIds {
 		dcNNList := scc.mappings.GetDCList(namespace, group, dataId)
 		if len(dcNNList) == 0 {
 			l.Info("no DynamicConfiguration listen to this dataId, stop listening from nacos server", "dataId", dataId)
@@ -352,5 +393,203 @@ func (scc *SyncConfigurationController) syncServer2Cluster(ctx context.Context, 
 	if len(errDataIdList) > 0 {
 		return fmt.Errorf("error dataIds: " + strings.Join(errDataIdList, ","))
 	}
+	return nil
+}
+
+func (scc *SyncConfigurationController) syncDual(ctx context.Context, dc *nacosiov1.DynamicConfiguration) error {
+	l := log.FromContext(ctx)
+	ifNew := dc.Status.SyncDirection != nacosiov1.Dual
+	dc.Status.SyncDirection = nacosiov1.Dual
+	var objectRef v1.ObjectReference
+	if dc.Spec.ObjectRef == nil {
+		apiVersion, kind := ConfigMapGVK.ToAPIVersionAndKind()
+		objectRef = v1.ObjectReference{
+			Namespace:  dc.Namespace,
+			Name:       dc.Name,
+			Kind:       kind,
+			APIVersion: apiVersion,
+		}
+	} else {
+		objectRef = *(dc.Spec.ObjectRef.DeepCopy())
+		objectRef.Namespace = dc.Namespace
+	}
+	dc.Status.ObjectRef = &objectRef
+
+	objWrapper, err := NewObjectReferenceWrapper(scc.cs, dc, &objectRef)
+	if err != nil {
+		l.Error(err, "[Dual] create object wrapper error")
+		return err
+	}
+
+	group := dc.Spec.NacosServer.Group
+	namespace := dc.Spec.NacosServer.Namespace
+	var errDataIdList []string
+
+	l = l.WithValues("group", group, "namespace", namespace)
+	anyContentChanged := false
+	syncIfAbsent := dc.Spec.Strategy.SyncPolicy == nacosiov1.IfAbsent
+	ifPreferCluster := dc.Spec.Strategy.ConflictPolicy == nacosiov1.PreferCluster
+	for _, dataId := range dc.Spec.DataIds {
+		logWithId := l.WithValues("dataId", dataId)
+		localContent, localExist, err := objWrapper.GetContent(dataId)
+		if err != nil {
+			logWithId.Error(err, "[Dual] read object reference content error", "objRef", objectRef.String())
+			errDataIdList = append(errDataIdList, dataId)
+			continue
+		}
+		serverContent, err := scc.configClient.GetConfig(nacosclient.NacosConfigParam{
+			DynamicConfiguration: dc,
+			Group:                group,
+			DataId:               dataId,
+		})
+		if err != nil {
+			logWithId.Error(err, "[Dual] read content from server error")
+			errDataIdList = append(errDataIdList, dataId)
+			UpdateSyncStatus(dc, dataId, "", "server", metav1.Now(), false, "read content from server error: "+err.Error())
+		}
+
+		nn := types.NamespacedName{
+			Namespace: dc.Namespace,
+			Name:      dc.Name,
+		}
+		serverExist := len(serverContent) > 0
+		//如果syncIfAbsent 并且 configMap和 Nacos Server 的配置都存在，则忽略同步动作
+		if syncIfAbsent && serverExist && localExist {
+			scc.mappings.RemoveMapping(namespace, group, dataId, nn)
+			logWithId.Info("[Dual] skipped due to sync policy IfAbsent", "dataId", dataId)
+			continue
+		}
+
+		lastSyncStatus := GetSyncStatusByDataId(dc.Status.SyncStatuses, dataId)
+		if ifNew || (lastSyncStatus == nil) {
+			//首次同步，需要解决冲突，建立监听
+			//如果configMap不存在，则从Nacos Server同步
+			if !localExist || (serverExist && !ifPreferCluster) {
+				anyContentChanged = true
+				if err := objWrapper.StoreContent(dataId, serverContent); err != nil {
+					logWithId.Error(err, "[Dual] store content to object reference error", "content", serverContent, "obj", objectRef)
+					errDataIdList = append(errDataIdList, dataId)
+					UpdateSyncStatus(dc, dataId, "", "server", metav1.Now(), false, "store content to object reference error: "+err.Error())
+					continue
+				}
+				UpdateSyncStatus(dc, dataId, CalcMd5(serverContent), "server", metav1.Now(), true, "")
+			} else {
+				_, err = scc.configClient.PublishConfig(nacosclient.NacosConfigParam{
+					DynamicConfiguration: dc,
+					Group:                group,
+					DataId:               dataId,
+					Content:              localContent,
+				})
+				if err != nil {
+					logWithId.Error(err, "[Dual] sync dataId from cluster to server error")
+					errDataIdList = append(errDataIdList, dataId)
+					UpdateSyncStatus(dc, dataId, "", "cluster", metav1.Now(), false, "sync dataId from cluster to server error: "+err.Error())
+					continue
+				}
+				logWithId.Info("[Dual] sync dataId from cluster to server successs", "dataId", dataId, "content", localContent)
+				UpdateSyncStatus(dc, dataId, CalcMd5(localContent), "cluster", metav1.Now(), true, "")
+			}
+		} else if !syncIfAbsent {
+			if (!localExist || len(localContent) == 0) && serverExist {
+				if dc.Spec.Strategy.SyncDeletion {
+					_, err := scc.configClient.DeleteConfig(nacosclient.NacosConfigParam{
+						DynamicConfiguration: dc,
+						Group:                group,
+						DataId:               dataId,
+					})
+					logWithId.Info("[Dual] delete dataId from server", "dataId", dataId)
+					if err != nil {
+						logWithId.Error(err, "[Dual] delete dataId from server error")
+						errDataIdList = append(errDataIdList, dataId)
+						UpdateSyncStatus(dc, dataId, "", "server", metav1.Now(), false, "delete dataId from server error: "+err.Error())
+						continue
+					}
+				}
+				UpdateSyncStatus(dc, dataId, "", "server", metav1.Now(), true, "delete dataId from server success")
+				continue
+			} else {
+				localContentMd5 := CalcMd5(localContent)
+				serverContentMd5 := CalcMd5(serverContent)
+				if localContentMd5 == serverContentMd5 {
+					logWithId.Info("skip syncing , due to same md5 of content", "md5", localContentMd5)
+					continue
+				} else {
+					_, err = scc.configClient.PublishConfig(nacosclient.NacosConfigParam{
+						DynamicConfiguration: dc,
+						Group:                group,
+						DataId:               dataId,
+						Content:              localContent,
+					})
+					if err != nil {
+						logWithId.Error(err, "[Dual] sync dataId from cluster to server error")
+						errDataIdList = append(errDataIdList, dataId)
+						UpdateSyncStatus(dc, dataId, "", "cluster", metav1.Now(), false, "sync dataId from cluster to server error: "+err.Error())
+						continue
+					}
+					logWithId.Info("[Dual] sync dataId from cluster to server successs", "dataId", dataId, "content", localContent)
+					UpdateSyncStatus(dc, dataId, CalcMd5(localContent), "cluster", metav1.Now(), true, "")
+				}
+			}
+
+		}
+
+		if syncIfAbsent {
+			//如果syncIfAbsent，则移除映射关系，服务端配置不会再次同步到本地
+			scc.mappings.RemoveMapping(namespace, group, dataId, nn)
+			continue
+		}
+		if !scc.mappings.HasMapping(namespace, group, dataId, nn) {
+			err = scc.configClient.ListenConfig(nacosclient.NacosConfigParam{
+				DynamicConfiguration: dc,
+				Group:                group,
+				DataId:               dataId,
+				OnChange:             scc.server2ClusterCallbackFn,
+			})
+			if err != nil {
+				logWithId.Error(err, "listen dataId error")
+				errDataIdList = append(errDataIdList, dataId)
+				continue
+			}
+			logWithId.Info("start listening from nacos server")
+			scc.mappings.AddMapping(namespace, group, dataId, nn)
+		}
+	}
+
+	if anyContentChanged {
+		if err := objWrapper.Flush(); err != nil {
+			l.Error(err, "flush object reference error")
+			return err
+		}
+	}
+
+	var removedDataIds []string
+	for _, status := range dc.Status.SyncStatuses {
+		if !StringSliceContains(dc.Spec.DataIds, status.DataId) {
+			removedDataIds = append(removedDataIds, status.DataId)
+		}
+	}
+
+	for _, dataId := range removedDataIds {
+		dcNNList := scc.mappings.GetDCList(namespace, group, dataId)
+		if len(dcNNList) == 0 {
+			l.Info("no DynamicConfiguration listen to this dataId, stop listening from nacos server", "dataId", dataId)
+			if err := scc.configClient.CancelListenConfig(nacosclient.NacosConfigParam{
+				DynamicConfiguration: dc,
+				Group:                group,
+				DataId:               dataId,
+			}); err != nil {
+				l.Error(err, "cancel listening dataId error", "dataId", dataId)
+				UpdateSyncStatus(dc, dataId, "", "controller", metav1.Now(), false, "cancel listening error: "+err.Error())
+				errDataIdList = append(errDataIdList, dataId)
+				continue
+			}
+		}
+		RemoveSyncStatus(dc, dataId)
+	}
+
+	if len(errDataIdList) > 0 {
+		return fmt.Errorf("[Dual] error dataIds: " + strings.Join(errDataIdList, ","))
+	}
+
 	return nil
 }

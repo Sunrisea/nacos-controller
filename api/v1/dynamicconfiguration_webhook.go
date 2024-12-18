@@ -154,7 +154,7 @@ func (r *DynamicConfiguration) validateObjectRef() *field.Error {
 }
 
 func (r *DynamicConfiguration) validateSyncStrategy() *field.Error {
-	syncDirectionSupportList := []string{string(Cluster2Server), string(Server2Cluster)}
+	syncDirectionSupportList := []string{string(Cluster2Server), string(Server2Cluster), string(Dual)}
 	if !stringsContains(syncDirectionSupportList, string(r.Spec.Strategy.SyncDirection)) {
 		return field.NotSupported(
 			field.NewPath("spec").Child("strategy").Child("syncDirection"),
@@ -166,6 +166,14 @@ func (r *DynamicConfiguration) validateSyncStrategy() *field.Error {
 		return field.NotSupported(
 			field.NewPath("spec").Child("strategy").Child("syncPolicy"),
 			r.Spec.Strategy.SyncPolicy,
+			syncPolicySupportList)
+	}
+
+	conflictPolicySupportList := []string{string(PreferCluster), string(PreferServer)}
+	if !stringsContains(conflictPolicySupportList, string(r.Spec.Strategy.ConflictPolicy)) {
+		return field.NotSupported(
+			field.NewPath("spec").Child("strategy").Child("conflictPolicy"),
+			r.Spec.Strategy.ConflictPolicy,
 			syncPolicySupportList)
 	}
 	return nil
