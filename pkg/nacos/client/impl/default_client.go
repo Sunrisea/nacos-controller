@@ -35,9 +35,12 @@ func (m *ClientBuilder) Build(authProvider auth.NacosAuthProvider, dc *nacosiov1
 	// 简化判空逻辑，cacheKey仅内部使用
 	cacheKey := fmt.Sprintf("%s-%s-%s", nacosServer.Endpoint, nacosServer.ServerAddr, nacosServer.Namespace)
 	cachedClient, ok := m.cache.Load(cacheKey)
+	fmt.Println("try build nacos client, cacheKey:" + cacheKey)
 	if ok && cachedClient != nil {
+		fmt.Println("cacheKey:" + cacheKey + " exist, return old one")
 		return cachedClient.(config_client.IConfigClient), nil
 	}
+	fmt.Println("cacheKey:" + cacheKey + " not exist, build new one")
 	clientParams, err := authProvider.GetNacosClientParams(dc)
 	if err != nil {
 		return nil, err
@@ -109,6 +112,7 @@ func (c *DefaultNacosConfigClient) GetConfig(param client.NacosConfigParam) (str
 	if param.DynamicConfiguration == nil {
 		return "", errors.New("empty DynamicConfiguration")
 	}
+	fmt.Println("try get config, dataId:" + param.DataId)
 	proxyClient, err := c.clientBuilder.Build(c.authProvider, param.DynamicConfiguration)
 	if err != nil {
 		return "", err
@@ -123,6 +127,7 @@ func (c *DefaultNacosConfigClient) PublishConfig(param client.NacosConfigParam) 
 	if param.DynamicConfiguration == nil {
 		return false, errors.New("empty DynamicConfiguration")
 	}
+	fmt.Println("try publish config, dataId:" + param.DataId)
 	proxyClient, err := c.clientBuilder.Build(c.authProvider, param.DynamicConfiguration)
 	if err != nil {
 		return false, err
