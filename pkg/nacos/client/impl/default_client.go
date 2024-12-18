@@ -33,7 +33,19 @@ func (m *ClientBuilder) Build(authProvider auth.NacosAuthProvider, dc *nacosiov1
 	}
 	nacosServer := dc.Spec.NacosServer
 	// 简化判空逻辑，cacheKey仅内部使用
-	cacheKey := fmt.Sprintf("%s-%s-%s", *(nacosServer.Endpoint), *(nacosServer.ServerAddr), nacosServer.Namespace)
+	var endpoint, serverAddr string
+	if nacosServer.Endpoint != nil {
+		endpoint = *(nacosServer.Endpoint)
+	} else {
+		endpoint = ""
+	}
+
+	if nacosServer.ServerAddr != nil {
+		serverAddr = *(nacosServer.ServerAddr)
+	} else {
+		serverAddr = ""
+	}
+	cacheKey := fmt.Sprintf("%s-%s-%s", endpoint, serverAddr, nacosServer.Namespace)
 	cachedClient, ok := m.cache.Load(cacheKey)
 	fmt.Println("try build nacos client, cacheKey:" + cacheKey)
 	if ok && cachedClient != nil {
